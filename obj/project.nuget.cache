@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "/UJP+a20O1/sgs1Bx/uq2mSaIrj8pvck7BO+aujNOKzVBFd4zNIBxRdEoVnE71RtLTx+lHAraIleXr5FfHjf2Q==",
+  "success": true,
+  "projectFilePath": "/mnt/1tb/repos/RainworldBattleRoyale/RainworldBattleRoyale.csproj",
+  "expectedPackageFiles": [
+    "/home/mirarge/.nuget/packages/microsoft.netframework.referenceassemblies/1.0.3/microsoft.netframework.referenceassemblies.1.0.3.nupkg.sha512",
+    "/home/mirarge/.nuget/packages/microsoft.netframework.referenceassemblies.net48/1.0.3/microsoft.netframework.referenceassemblies.net48.1.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}
