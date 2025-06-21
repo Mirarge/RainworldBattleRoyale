@@ -1,38 +1,23 @@
 // ExternalCoolGame.cs
 using RainMeadow;
 
-using System.Text.RegularExpressions;
-using Menu;
 using System;
 using System.Collections.Generic;
 using RWCustom;
 using MoreSlugcats;
 using System.Linq;
-using System.Drawing;
 using UnityEngine;
-using System.CodeDom;
-using On.HUD;
-using HUD;
-using MonoMod;
 using MonoMod.RuntimeDetour;
-using System.Reflection;
-using System.IO;
 
 //BUGS
 /*
-
--- There is a nullreference happening somewhere, but only for the non-hosts
--- Its possible that setting the deathRain is a bad idea. I may have to use what HeavyRain does. Doesn't appear to affect rooms that didn't have
-rain before though. Also doesn't affect lightning
-        num8 is a number from 0f to 1f. 
-        GlobalRain.Intensity = (1f + num8 * 4f) * 0.24f;
-		GlobalRain.RumbleSound = num8 * 0.2f;
-		GlobalRain.ScreenShake = num8;
+Player slugcat color isn't applied. Players always use the color of the slugcat default
+Spectating uses the room the players'  body is in.
 */
 
 //TODO
 /*
-
+Make sure to take exclusive rooms into account. They should be ignored/used as areablocker if its the wrong scug.
 
 */
 
@@ -49,10 +34,27 @@ namespace MeadowBattleRoyale
         WorldCoordinate spawnCoord;
         public List<RoomInfo> roomInfos; //Only the host keeps track of this
 
+        private Color dangerShortCutColor = new Color(1f, 0f, 0f);
+        private Color mediumShortCutColor = new Color(1f, 1f, 0f);
+        private Color safeShortCutColor = new Color(0f, 1f, 0f);
 
 
 
 
+        public void WorldSessionWorldStateReadTo(Action<WorldSession.WorldState, OnlineResource> orig, WorldSession.WorldState self, OnlineResource resource)
+        {
+
+            try
+            {
+                orig(self, resource);
+                RainWorldGame game = Custom.rainWorld.processManager.currentMainLoop as RainWorldGame;
+                CheckForRoomRain(myCurrentRoom, game);
+            }
+            catch (Exception ex)
+            {
+                BattleRoyale.Logger.LogError($"Error in ReadTo hook: {ex.Message}");
+            }
+        }
 
         public ExternalBattleRoyaleGameMode(Lobby lobby) : base(lobby)
         {
@@ -61,79 +63,111 @@ namespace MeadowBattleRoyale
             avatarSettings.bodyColor = RainMeadow.RainMeadow.rainMeadowOptions.BodyColor.Value;
             avatarSettings.nickname = OnlineManager.mePlayer.id.name;
 
+
             On.OverWorld.LoadFirstWorld += OnOverworldFirstLoad;
             On.RegionGate.customKarmaGateRequirements += OnRegionGateCustomKarmaGateRequirements;
             On.GameSession.AddPlayer += OnGameSessionAddPlayer;
-            On.Player.Die += OnPlayerDie;
+            //On.Player.Die += OnPlayerDie;
+            On.Creature.Die += Creature_Die;
             On.HUD.TextPrompt.UpdateGameOverString += TextPrompt_UpdateGameOverString;
             On.HUD.TextPrompt.Update += TextPrompt_Update;
             On.HUD.HUD.InitSinglePlayerHud += HUD_InitSinglePlayerHud;
+            On.ShortcutGraphics.Draw += DrawShortcutGraphics;
 
-            var method = typeof(WorldSession.WorldState).GetMethod(nameof(WorldSession.WorldState.ReadTo));
-            var origDelegate = (Action<WorldSession.WorldState, OnlineResource>)Delegate.CreateDelegate(
-                typeof(Action<WorldSession.WorldState, OnlineResource>),
-                method
+            new Hook(
+                typeof(WorldSession.WorldState).GetMethod(nameof(WorldSession.WorldState.ReadTo)),
+                new Action<Action<WorldSession.WorldState, OnlineResource>, WorldSession.WorldState, OnlineResource>(WorldSessionWorldStateReadTo)
             );
-            new Hook(method,
-            (Action<WorldSession.WorldState, OnlineResource>)((self, resource) =>
-            {
-                // Call the original method
-                origDelegate(self, resource);
-
-                // Your custom logic
-                try
-                {
-                    RainWorldGame game = Custom.rainWorld.processManager.currentMainLoop as RainWorldGame;
-                    CheckForRoomRain(myCurrentRoom, game);
-                }
-                catch (Exception ex)
-                {
-                    BattleRoyale.Logger.LogError($"Error in ReadTo hook: {ex}");
-                }
-            })
-        );
         }
 
-
-        private void OnPlayerDie(On.Player.orig_Die orig, Player self)
+        private void DrawShortcutGraphics(On.ShortcutGraphics.orig_Draw orig, ShortcutGraphics self, float timeStacker, Vector2 camPos)
         {
-            if (self.dead)
+            orig(self, timeStacker, camPos);
+            for (int i = 0; i < self.room.shortcuts.Length; i++)
             {
-                return;
-            }
-            orig(self);
-            self.dead = true; //feels redundant but you know how it is.
-            BattleRoyale.Logger.LogMessage($"{battleRoyaleData.playersLeft.Count} players left before removing self");
+                if (self.room.shortcuts[i].shortCutType != ShortcutData.Type.RoomExit) continue;
+                if (i >= self.entranceSprites.GetLength(0)) continue; // Prevent crash
 
-            BattleRoyale.Logger.LogMessage($"{battleRoyaleData.playersLeft.Count} players left alive");
-            if (battleRoyaleData.playersLeft.Remove(OnlineManager.mePlayer))
-            {
-                if (battleRoyaleData.playersLeft.Count <= -1)
+                int destNode = self.room.shortcuts[i].destNode;
+
+                // make sure destNode is valid
+                if (destNode < 0 || destNode >= self.room.abstractRoom.connections.Length) continue;
+
+                int connectedRoomIndex = self.room.abstractRoom.connections[destNode];
+                AbstractRoom connectedRoom = self.room.world.GetAbstractRoom(connectedRoomIndex);
+
+                if (connectedRoom == null) continue; // extra safety
+                string connectedRoomName = connectedRoom.name;
+
+                if (self.entranceSprites[i, 0] != null)
                 {
-                    battleRoyaleData.battleRoyaleState = BattleRoyaleStatus.GameNotStarted;
-                    foreach (OnlinePlayer player in OnlineManager.players)
+                    if (battleRoyaleData.roomsWithRain.Contains(connectedRoomName))
                     {
-                        try
-                        {
-                            player.InvokeOnceRPC(SendBackToLobby);
-                        }
-                        catch (Exception ex)
-                        {
-                            BattleRoyale.Logger.LogError($"Something went wrong trying to invoke: {ex.Message}");
-                        }
+                        self.entranceSprites[i, 0].color = dangerShortCutColor;
+                    }
+                    else if (battleRoyaleData.roomsWithoutRain.Contains(connectedRoomName))
+                    {
+                        self.entranceSprites[i, 0].color = safeShortCutColor;
+                    }
+                    else if (battleRoyaleData.roomsWithIncomingRain.Contains(connectedRoomName))
+                    {
+                        self.entranceSprites[i, 0].color = CalculateShortcutDanger(self.room.world);
+                    }
+                    else
+                    {
+                        self.entranceSprites[i, 0].color = new Color(1f, 1f, 1f);
                     }
                 }
-                else
+            }
+        }
+
+        public Color CalculateShortcutDanger(World world)
+        {
+            float dangerPercent = (float)battleRoyaleData.stormTimer / battleRoyaleData.stormTimerMax;
+            return Color.Lerp(safeShortCutColor, dangerShortCutColor, dangerPercent);
+        }
+        private void Creature_Die(On.Creature.orig_Die orig, Creature crit)
+        {
+            orig(crit);
+            if (!crit.dead) // Prevent death messages from firing 987343 times.
+            {
+                BattleRoyale.Logger.LogMessage($"{battleRoyaleData.playersLeft.Count} players left before removing self");
+                if (true)//battleRoyaleData.playersLeft.Remove(OnlineManager.mePlayer))
                 {
-                    foreach (OnlinePlayer player in OnlineManager.players)
+                    BattleRoyale.Logger.LogMessage($"{battleRoyaleData.playersLeft.Count} players left alive");
+                    if (battleRoyaleData.playersLeft.Count <= 1)
                     {
-                        try
+                        battleRoyaleData.battleRoyaleState = BattleRoyaleStatus.PlayerHasWon;
+                        battleRoyaleData.stormTimer = 0;
+                        string lastPlayer = battleRoyaleData.playersLeft[0].id.name;
+                        BattleRoyale.Logger.LogMessage($"Last player left is {lastPlayer}");
+
+
+
+                        foreach (OnlinePlayer player in OnlineManager.players)
                         {
-                            player.InvokeOnceRPC(NotifyThatPlayerDied, battleRoyaleData.playersLeft.Count, OnlineManager.mePlayer.ToString());
+                            try
+                            {
+                                player.InvokeOnceRPC(NotifyThatPlayerWon, lastPlayer, battleRoyaleData.playersLeft[0]);
+                            }
+                            catch (Exception ex)
+                            {
+                                BattleRoyale.Logger.LogError($"Something went wrong trying to invoke: {ex.Message}");
+                            }
                         }
-                        catch (Exception ex)
+                    }
+                    else
+                    {
+                        foreach (OnlinePlayer player in OnlineManager.players)
                         {
-                            BattleRoyale.Logger.LogError($"Something went wrong trying to invoke: {ex.Message}");
+                            try
+                            {
+                                player.InvokeOnceRPC(NotifyThatPlayerDied, battleRoyaleData.playersLeft.Count, OnlineManager.mePlayer.ToString());
+                            }
+                            catch (Exception ex)
+                            {
+                                BattleRoyale.Logger.LogError($"Something went wrong trying to invoke: {ex.Message}");
+                            }
                         }
                     }
                 }
@@ -167,15 +201,14 @@ namespace MeadowBattleRoyale
             self.AddPart(new OnlineHUD(self, cam, this));
             self.AddPart(new SpectatorHud(self, cam));
             self.AddPart(new Pointing(self));
+            
             if (MatchmakingManager.currentInstance.canSendChatMessages) self.AddPart(new ChatHud(self, cam));
         }
-
         private void OnRegionGateCustomKarmaGateRequirements(On.RegionGate.orig_customKarmaGateRequirements orig, RegionGate self)
         {
-            self.karmaRequirements[0] = MoreSlugcatsEnums.GateRequirement.OELock;
-            self.karmaRequirements[1] = MoreSlugcatsEnums.GateRequirement.OELock;
+            self.karmaRequirements[0] = RegionGate.GateRequirement.DemoLock;
+            self.karmaRequirements[1] = RegionGate.GateRequirement.DemoLock;
         }
-
         private void OnOverworldFirstLoad(On.OverWorld.orig_LoadFirstWorld orig, OverWorld self)
         {
             foreach (int key in battleRoyaleData.playerStartingRoomsKey)
@@ -187,23 +220,24 @@ namespace MeadowBattleRoyale
                     self.FIRSTROOM = myRoom;
 
                     AbstractRoom spawnRoom = self.game.world.abstractRooms.First(x => x.name == myRoom);
-
+                    List<int> entrancePipes = new();
                     for (int i4 = 0; i4 < spawnRoom.nodes.Length; i4++)
                     {
 
                         if (spawnRoom.nodes[i4].type == AbstractRoomNode.Type.Exit && i4 < spawnRoom.connections.Length && spawnRoom.connections[i4] > -1)
                         {
-                            abstractNode = i4;
-                            spawnRoom.RealizeRoom(self.game.world, self.game);
-                            ShortcutMapper scMapper = new ShortcutMapper(spawnRoom.realizedRoom);
-                            while (!scMapper.done)
-                            {
-                                scMapper.Update();
-                            }
-                            spawnCoord = spawnRoom.realizedRoom.LocalCoordinateOfNode(i4);
-                            break;
+                            entrancePipes.Add(i4);
                         }
                     }
+                    int pipe = entrancePipes[UnityEngine.Random.Range(0, entrancePipes.Count)];
+                    abstractNode = pipe;
+                    spawnRoom.RealizeRoom(self.game.world, self.game);
+                    ShortcutMapper scMapper = new ShortcutMapper(spawnRoom.realizedRoom);
+                    while (!scMapper.done)
+                    {
+                        scMapper.Update();
+                    }
+                    spawnCoord = spawnRoom.realizedRoom.LocalCoordinateOfNode(pipe);
                 }
             }
         }
@@ -218,13 +252,21 @@ namespace MeadowBattleRoyale
                 //Visual and auditory flair for the player spawning :3
                 ply.Room.realizedRoom.PlaySound(SoundID.UI_Multiplayer_Game_Start);
                 ply.Room.realizedRoom.AddObject(new GhostPing(ply.Room.realizedRoom));
+                if (battleRoyaleData.region == "SH")
+                {
+                    (ply.realizedCreature as Player).glowing = true;
+                }
             }
         }
-
-
         public override void Customize(Creature creature, OnlineCreature oc)
         {
-
+            BattleRoyale.Logger.LogMessage("Trying to apply customization");
+            BattleRoyale.Logger.LogMessage($"result is {oc.TryGetData<SlugcatCustomization>(out var custom)}");
+            if (oc.TryGetData<SlugcatCustomization>(out var data))
+            {
+                BattleRoyale.Logger.LogMessage($"getting value {RainMeadow.RainMeadow.creatureCustomizations.GetValue(creature, (c) => data)}");
+                RainMeadow.RainMeadow.creatureCustomizations.GetValue(creature, (c) => data);
+            }
         }
         public override void ConfigureAvatar(OnlineCreature onlineCreature)
         {
@@ -234,7 +276,6 @@ namespace MeadowBattleRoyale
         {
             return new("BattleRoyaleMenu", true);
         }
-
         public override bool PlayersCanStack => false; //Disables players being able to stack
         public override bool PlayersCanHandhold => false; //Disables players being able to hold each other
         public override bool ShouldSpawnRoomItems(RainWorldGame game, RoomSession roomSession) //Allow items to spawn
@@ -253,7 +294,6 @@ namespace MeadowBattleRoyale
         {
             return battleRoyaleData.slugcat; //Todo: fix
         }
-
         public override void ResourceAvailable(OnlineResource onlineResource)
         {
             base.ResourceAvailable(onlineResource);
@@ -275,6 +315,21 @@ namespace MeadowBattleRoyale
                 if (battleRoyaleData.battleRoyaleState == BattleRoyaleStatus.GameNotStarted)
                 {
                     return;
+                }
+                if (battleRoyaleData.battleRoyaleState == BattleRoyaleStatus.PlayerHasWon && battleRoyaleData.stormTimer == 20 * 5)
+                {
+                    battleRoyaleData.battleRoyaleState = BattleRoyaleStatus.GameNotStarted;
+                    foreach (OnlinePlayer player in OnlineManager.players)
+                    {
+                        try
+                        {
+                            player.InvokeOnceRPC(SendBackToLobby);
+                        }
+                        catch (Exception ex)
+                        {
+                            BattleRoyale.Logger.LogError($"Something went wrong trying to invoke: {ex.Message}");
+                        }
+                    }
                 }
                 battleRoyaleData.stormTimer++;
                 if (battleRoyaleData.battleRoyaleState == BattleRoyaleStatus.PeaceTime && battleRoyaleData.stormTimer > 0)
@@ -304,8 +359,8 @@ namespace MeadowBattleRoyale
                             battleRoyaleData.battleRoyaleState = BattleRoyaleStatus.OneRoomRemainingWait;
                             roomAmount = battleRoyaleData.roomsWithoutRain.Count - 1;
                         }
-                        
-                        
+
+
                     }
                     else
                     {
@@ -316,7 +371,7 @@ namespace MeadowBattleRoyale
                 }
             }
 
-            
+
             foreach (OnlineEntity.EntityId playerAvatar in OnlineManager.lobby.playerAvatars.Select(kv => kv.Value))
             {
                 if (playerAvatar.type == (byte)OnlineEntity.EntityId.IdType.none) continue; // not in game
@@ -331,10 +386,29 @@ namespace MeadowBattleRoyale
                         if (ply.Room.name != myCurrentRoom)
                         {
                             myCurrentRoom = ply.Room.name;
+                            ply.Room.realizedRoom.roomSettings.RainIntensity = 1f;
+                            if (ply.Room.realizedRoom.roomSettings.DangerType == RoomRain.DangerType.None)
+                            {
+                                ply.Room.realizedRoom.roomSettings.DangerType = RoomRain.DangerType.Rain;
+                                if (ply.Room.world.name == "SS")
+                                {
+                                    ply.Room.realizedRoom.roomSettings.DangerType = RoomRain.DangerType.Thunder;
+                                    ElectricDeath death = new ElectricDeath(new RoomSettings.RoomEffect(RoomSettings.RoomEffect.Type.ElectricDeath, 1f, false), ply.Room.realizedRoom);
+                                    ply.Room.realizedRoom.AddObject(death);
+
+                                }
+                                else if (ply.Room.world.name == "LC" && ModManager.Watcher)
+                                {
+                                    ply.Room.realizedRoom.roomSettings.DangerType = Watcher.WatcherEnums.WatcherDangerType.Sandstorm;
+                                }
+                            }
                         }
-                        ply.Room.realizedRoom.roomSettings.RainIntensity = 1f;
-                        ply.Room.realizedRoom.roomSettings.DangerType = RoomRain.DangerType.Rain;
-                        CheckForRoomRain(ply.Room.realizedRoom.abstractRoom.name, ply.world.game);
+                        string roomName = ply.Room.name;
+                        if (ply.realizedCreature.dead)
+                        {
+                            roomName = ply.world.game.cameras[0].room.abstractRoom.name;
+                        }
+                        CheckForRoomRain(roomName, ply.world.game);
                     }
                     catch (Exception ex)
                     {
@@ -343,14 +417,13 @@ namespace MeadowBattleRoyale
                 }
             }
         }
-
         public override void PostGameStart(RainWorldGame self)
         {
             BattleRoyale.Logger.LogInfo("Game has been started!");
             myCurrentRoom = "";
             amIInRoomWithIncomingRain = false;
             self.globalRain.ResetRain();
-            
+
             if (lobby.isOwner)
             {
                 battleRoyaleData.battleRoyaleState = BattleRoyaleStatus.PeaceTime;
@@ -394,7 +467,7 @@ namespace MeadowBattleRoyale
 
         public void CheckForRoomRain(string room, RainWorldGame game)
         {
-            
+
             if (battleRoyaleData.roomsWithoutRain.Contains(room))
             {
                 amIInRoomWithIncomingRain = false;
@@ -472,6 +545,70 @@ namespace MeadowBattleRoyale
 
             //https://github.com/henpemaz/Rain-Meadow/blob/1b67ebbbce29f2d3a1de2cff9f2bf416da11d506/OnlineUIComponents/DeathMessage.cs#L253 to add to the kill feed
             //^ also has the player death events right below it.
+        }
+
+        [RPCMethod]
+        public static void NotifyThatPlayerWon(string playerName, OnlinePlayer onlinePlayer)
+        {
+            BattleRoyale.Logger.LogMessage($"Player {playerName} has won!");
+            ChatLogManager.LogSystemMessage($"{playerName} won!");
+            AbstractCreature player = null;
+            foreach (OnlineEntity.EntityId playerAvatar in OnlineManager.lobby.playerAvatars.Select(kv => kv.Value))
+            {
+                if (playerAvatar.type == (byte)OnlineEntity.EntityId.IdType.none) continue; // not in game
+                if (playerAvatar.FindEntity(true) is OnlinePhysicalObject opo1 && opo1.apo is AbstractCreature ac)
+                {
+                    if (ac.GetOnlineCreature().owner == onlinePlayer)
+                    {
+                        player = ac;
+                        break;
+                    }
+                }
+            }
+            if (player == null)
+            {
+                BattleRoyale.Logger.LogMessage($"Player reference was null, so flair was disabled.");
+                return;
+            }
+
+            if (player.realizedCreature == null)
+            {
+                BattleRoyale.Logger.LogMessage($"realizedCreature was null, can't apply flair.");
+                return;
+            }
+            var gfx = player.realizedCreature.graphicsModule as PlayerGraphics;
+            if (gfx == null)
+            {
+                BattleRoyale.Logger.LogMessage($"Graphics module was not PlayerGraphics or was null.");
+                return;
+            }
+
+
+            // Fully darken the player immediately
+            //gfx.darkenFactor = 1f;
+
+            // Big spark burst for dramatic flair
+            for (int j = 0; j < 60; j++)
+            {
+                float value = UnityEngine.Random.Range(0f, 1f);
+                Spark spark = new Spark(
+                    player.realizedCreature.mainBodyChunk.pos,
+                    Custom.RNV() * value * 5f,
+                    new Color(1f, 1f, 1f),
+                    null,
+                    10 + (int)((1f - value) * 60f),
+                    36 + (int)((1f - value) * 200f)
+                );
+                spark.gravity = 0f;
+                player.realizedCreature.room.AddObject(spark);
+            }
+            player.realizedCreature.room.AddObject(new ShockWave(player.realizedCreature.mainBodyChunk.pos, 500f, 0.75f, 18));
+            player.realizedCreature.room.AddObject(new Explosion.ExplosionLight(player.realizedCreature.mainBodyChunk.pos, 320f, 1f, 5, Color.white));
+            player.realizedCreature.room.AddObject(new GhostPing(player.realizedCreature.room));
+
+            player.world.game.cameras[0].hud.AddPart(new PlayerWinDisplay(playerName,player.world.game.cameras[0].hud.fContainers[0],player.world.game.cameras[0].hud));
+            //self.AddPart(new ArenaPrepTimer(self, self.fContainers[0], arena, session));
+            //player.realizedCreature.room.gravity = 0f;
         }
     }
 }

@@ -6,12 +6,13 @@ using System.Linq;
 namespace MeadowBattleRoyale
 {
     public enum BattleRoyaleStatus
-        {
-            GameNotStarted, //Still in lobby possibly
-            PeaceTime, //The time before the storms start
-            Regular, //Storms have started. The game has really begun.
-            OneRoomRemainingWait, //The rooms around the final room are filling with rain now
-            FinalBattle //Only one room doesn't have deathrain.
+    {
+        GameNotStarted, //Still in lobby possibly
+        PeaceTime, //The time before the storms start
+        Regular, //Storms have started. The game has really begun.
+        OneRoomRemainingWait, //The rooms around the final room are filling with rain now
+        FinalBattle, //Only one room doesn't have deathrain.
+        PlayerHasWon
 
         }
 

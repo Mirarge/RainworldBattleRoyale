@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("RainworldBattleRoyale")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5569c1f048578232a287356a831289c26bda60fc")]
 [assembly: System.Reflection.AssemblyProductAttribute("RainworldBattleRoyale")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RainworldBattleRoyale")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

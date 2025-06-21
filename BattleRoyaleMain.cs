@@ -9,6 +9,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Security.Permissions;
 using UnityEngine;
+using MonoMod.RuntimeDetour;
 
 #pragma warning disable CS0618
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
@@ -48,17 +49,13 @@ namespace MeadowBattleRoyale
 
                 // setup
                 RainMeadow.OnlineGameMode.RegisterType(BattleRoyaleGameMode, typeof(ExternalBattleRoyaleGameMode), "A Free for all battle, storms approach as you battle to the top for safety.");
-                //RainMeadow.LocalMatchmakingManager.localGameMode = "Battle Royale"; //It should need this?
-
-                // visuals
-                //On.PlayerGraphics.DrawSprites += PlayerGraphics_DrawSprites;
-
-                // hit detection
-                //On.Rock.HitSomething += Rock_HitSomething;
-                //On.Player.Collide += Player_Collide;
 
                 // timer
                 On.HUD.HUD.InitSinglePlayerHud += HUD_InitSinglePlayerHud;
+                new Hook(
+                    typeof(Lobby).GetMethod(nameof(Lobby.RequestedLobby)),
+                    new Action<Action<Lobby, RPCEvent, string>, Lobby, RPCEvent, string>(LobbyRequestedLobby)
+                );
 
                 fullyInit = true;
             }
@@ -68,6 +65,24 @@ namespace MeadowBattleRoyale
                 fullyInit = false;
                 //throw;
             }
+        }
+
+        public void LobbyRequestedLobby(Action<Lobby, RPCEvent, string> orig, Lobby self, RPCEvent request, string key)
+        {
+            if (self.gameMode is ExternalBattleRoyaleGameMode)
+            {
+                if ((self.gameMode as ExternalBattleRoyaleGameMode).battleRoyaleData.battleRoyaleState != BattleRoyaleStatus.GameNotStarted)
+                {
+                    orig(self, request, key);
+                }
+                else
+                {
+                    request.from.QueueEvent(new GenericResult.Fail(request));
+                }
+                return;
+            }
+            orig(self, request, key);
+            
         }
 
         private void HUD_InitSinglePlayerHud(On.HUD.HUD.orig_InitSinglePlayerHud orig, HUD.HUD self, RoomCamera cam)

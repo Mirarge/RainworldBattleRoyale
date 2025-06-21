@@ -19,7 +19,6 @@ namespace MeadowBattleRoyale
         ExternalBattleRoyaleGameMode gamemode;
         SlugcatCustomization customization;
         SlugcatCustomizationSelectorNoScug customizationHolder;
-        SimplerButton playButton;
         OpUpdown setupTime;
         OpUpdown finalBattleTime;
         OpUpdown roomRainWaitTime;
@@ -302,8 +301,9 @@ namespace MeadowBattleRoyale
             ProcessManager manager = Custom.rainWorld.processManager;
             manager.arenaSitting = null;
             manager.rainWorld.progression.ClearOutSaveStateFromMemory();
+            manager.rainWorld.progression.WipeSaveState((OnlineManager.lobby.gameMode as ExternalBattleRoyaleGameMode).battleRoyaleData.slugcat);
             manager.rainWorld.progression.miscProgressionData.currentlySelectedSinglePlayerSlugcat = slugcat;
-            manager.menuSetup.startGameCondition = ProcessManager.MenuSetup.StoryGameInitCondition.Load;
+            manager.menuSetup.startGameCondition = ProcessManager.MenuSetup.StoryGameInitCondition.New;
             manager.RequestMainProcessSwitch(ProcessManager.ProcessID.Game);
         }
 
@@ -414,7 +414,6 @@ namespace MeadowBattleRoyale
             }
             return roomList;
         }
-
         public List<RoomInfo> CalculateRoomDistanceFromCenter(List<RoomInfo> inputList, string centerRoom, List<string> areaBlockers)
         {
             RoomInfo centerRoomInfo = inputList.Find(r => r.Name == centerRoom);
